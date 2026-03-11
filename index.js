@@ -38,14 +38,14 @@ async function setManyChatField(subscriberId, fieldName, value) {
   if (!MANYCHAT_API_TOKEN || !subscriberId || !value || value === "null") return;
 
   try {
-    const response = await fetch("https://api.manychat.com/ig/subscriber/setCustomField", {
+    const response = await fetch("https://api.manychat.com/fb/subscriber/setCustomField", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        subscriber_id: subscriberId,
+        subscriber_id: Number(subscriberId),
         field_name: fieldName,
         field_value: String(value),
       }),
@@ -67,14 +67,14 @@ async function addManyChatTag(subscriberId, tagName) {
   if (!MANYCHAT_API_TOKEN || !subscriberId) return;
 
   try {
-    const response = await fetch("https://api.manychat.com/ig/subscriber/addTagByName", {
+    const response = await fetch("https://api.manychat.com/fb/subscriber/addTagByName", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        subscriber_id: subscriberId,
+        subscriber_id: Number(subscriberId),
         tag_name: tagName,
       }),
     });
@@ -354,17 +354,18 @@ app.post("/webhook", async (req, res) => {
     // ENVIA A MENSAGEM DIRETO PELA API DO MANYCHAT (sem depender do bloco Dinâmico)
     if (subscriberId && MANYCHAT_API_TOKEN) {
       try {
-        const sendResponse = await fetch("https://api.manychat.com/ig/sending/sendContent", {
+        const sendResponse = await fetch("https://api.manychat.com/fb/sending/sendContent", {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            subscriber_id: subscriberId,
+            subscriber_id: Number(subscriberId),
             data: {
               version: "v2",
               content: {
+                type: "instagram",
                 messages: [
                   {
                     type: "text",
