@@ -344,10 +344,50 @@ app.post("/webhook", async (req, res) => {
     let replyText = claudeData.reply || "Oi! Me da um instante que ja te respondo.";
     replyText = replyText.replace(/\[LINK\]/g, LINK_PAGAMENTO);
 
+    // SALVA A RESPOSTA NO CAMPO sdr_resposta PARA O MANYCHAT ENVIAR
+    if (subscriberId && MANYCHAT_API_TOKEN) {
+      await setManyChatField(subscriberId, "sdr_resposta", replyText);
+      console.log(`[ManyChat] sdr_resposta atualizado para subscriber ${subscriberId}`);
+    }
+
+    // ENVIA A MENSAGEM DIRETO PELA API DO MANYCHAT (sem depender do bloco Dinâmico)
+    if (subscriberId && MANYCHAT_API_TOKEN) {
+      try {
+        const sendResponse = await fetch("https://api.manychat.com/fb/sending/sendContent", {
+          method: "POST",
+          headers: {
+            "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            subscriber_id: subscriberId,
+            data: {
+              version: "v2",
+              content: {
+                messages: [
+                  {
+                    type: "text",
+                    text: replyText,
+                  },
+                ],
+              },
+            },
+          }),
+        });
+        if (sendResponse.ok) {
+          console.log(`[ManyChat] Mensagem enviada diretamente ao lead!`);
+        } else {
+          console.warn(`[ManyChat] Erro ao enviar mensagem:`, sendResponse.status);
+        }
+      } catch (sendError) {
+        console.warn(`[ManyChat] Erro ao enviar mensagem:`, sendError.message);
+      }
+    }
+
     console.log(`Action: ${claudeData.action} | New State: ${claudeData.lead_state}`);
     console.log(`Resposta: ${replyText.substring(0, 100)}...`);
 
-    // Retorna apenas a mensagem - os campos ja foram atualizados via API
+    // Retorna a mensagem tambem na resposta (caso o ManyChat use)
     return res.json({
       version: "v2",
       content: {
