@@ -23,8 +23,115 @@ const SYSTEM_PROMPT = fs.readFileSync(
 );
 
 const LINK_PAGAMENTO = process.env.LINK_PAGAMENTO || "https://seu-link-aqui.com";
+const MANYCHAT_API_TOKEN = process.env.MANYCHAT_API_TOKEN;
 const PORT = process.env.PORT || 3000;
-const TIMEOUT_MS = 25000; // 25 segundos (Railway tem limite de 30s)
+const TIMEOUT_MS = 25000;
+
+// ============================================================
+// MANYCHAT API - ATUALIZAR CAMPOS DIRETO
+// ============================================================
+
+/**
+ * Atualiza um Custom Field do lead no ManyChat via API
+ */
+async function setManyChatField(subscriberId, fieldName, value) {
+  if (!MANYCHAT_API_TOKEN || !subscriberId || !value || value === "null") return;
+
+  try {
+    const response = await fetch("https://api.manychat.com/fb/subscriber/setCustomField", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        subscriber_id: subscriberId,
+        field_name: fieldName,
+        field_value: String(value),
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`ManyChat API erro ao setar ${fieldName}:`, response.status);
+    }
+  } catch (error) {
+    console.warn(`ManyChat API erro ao setar ${fieldName}:`, error.message);
+  }
+}
+
+/**
+ * Adiciona uma tag ao lead no ManyChat via API
+ */
+async function addManyChatTag(subscriberId, tagName) {
+  if (!MANYCHAT_API_TOKEN || !subscriberId) return;
+
+  try {
+    const response = await fetch("https://api.manychat.com/fb/subscriber/addTagByName", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        subscriber_id: subscriberId,
+        tag_name: tagName,
+      }),
+    });
+
+    if (!response.ok) {
+      console.warn(`ManyChat API erro ao adicionar tag ${tagName}:`, response.status);
+    }
+  } catch (error) {
+    console.warn(`ManyChat API erro ao adicionar tag ${tagName}:`, error.message);
+  }
+}
+
+/**
+ * Atualiza todos os campos do lead no ManyChat baseado na resposta do Claude
+ */
+async function updateManyChatLead(subscriberId, claudeData) {
+  if (!subscriberId || !MANYCHAT_API_TOKEN) {
+    console.warn("Sem subscriber_id ou MANYCHAT_API_TOKEN - pulando atualizacao ManyChat");
+    return;
+  }
+
+  const updates = [];
+
+  // Atualiza lead_state
+  if (claudeData.lead_state) {
+    updates.push(setManyChatField(subscriberId, "lead_state", claudeData.lead_state));
+  }
+
+  // Atualiza campos do lead
+  if (claudeData.lead_updates) {
+    const fields = claudeData.lead_updates;
+    for (const [key, value] of Object.entries(fields)) {
+      if (value && value !== "null" && value !== null) {
+        updates.push(setManyChatField(subscriberId, key, value));
+      }
+    }
+  }
+
+  // Adiciona tags baseadas na acao
+  if (claudeData.action === "handoff") {
+    updates.push(addManyChatTag(subscriberId, "handoff_solicitado"));
+  }
+  if (claudeData.action === "send_link") {
+    updates.push(addManyChatTag(subscriberId, "link_enviado"));
+    updates.push(addManyChatTag(subscriberId, "lead_quente"));
+  }
+  if (claudeData.lead_updates?.lead_temperatura === "quente") {
+    updates.push(addManyChatTag(subscriberId, "lead_quente"));
+  }
+  if (claudeData.lead_state === "objecao") {
+    // Incrementar objecao_count - pegar valor atual + 1
+    updates.push(setManyChatField(subscriberId, "objecao_count", String((claudeData.current_objecao_count || 0) + 1)));
+  }
+
+  // Executa todas as atualizacoes em paralelo
+  await Promise.allSettled(updates);
+  console.log(`[ManyChat] ${updates.length} campos atualizados para subscriber ${subscriberId}`);
+}
 
 // ============================================================
 // FUNCOES AUXILIARES
@@ -36,9 +143,8 @@ const TIMEOUT_MS = 25000; // 25 segundos (Railway tem limite de 30s)
 function buildConversationMessages(payload) {
   let history = [];
 
-  // Tenta parsear o historico existente
   try {
-    if (payload.conversation_history && payload.conversation_history !== "[]") {
+    if (payload.conversation_history && payload.conversation_history !== "[]" && payload.conversation_history !== "") {
       history = JSON.parse(payload.conversation_history);
     }
   } catch (e) {
@@ -46,7 +152,6 @@ function buildConversationMessages(payload) {
     history = [];
   }
 
-  // Adiciona a mensagem atual do lead
   if (payload.last_message) {
     history.push({
       role: "user",
@@ -54,7 +159,6 @@ function buildConversationMessages(payload) {
     });
   }
 
-  // Limita a 10 mensagens (FIFO)
   if (history.length > 10) {
     history = history.slice(-10);
   }
@@ -66,19 +170,27 @@ function buildConversationMessages(payload) {
  * Monta o contexto dinamico do lead para injetar no prompt
  */
 function buildLeadContext(payload) {
+  // Aceita tanto formato aninhado (lead_profile.nome) quanto flat (lead_nome)
   const profile = payload.lead_profile || {};
+  const nome = profile.nome || payload.lead_nome || "";
+  const nicho = profile.nicho || payload.lead_nicho || "";
+  const faturamento = profile.faturamento || payload.lead_faturamento || "";
+  const dor = profile.dor_principal || payload.lead_dor_principal || "";
+  const desejo = profile.desejo || payload.lead_desejo || "";
+  const objecao = profile.objecao || payload.lead_objecao || "";
+  const temperatura = profile.temperatura || payload.lead_temperatura || "frio";
 
   return `
 # CONTEXTO DO LEAD (DADOS ATUAIS)
 
 - Estado atual do funil: ${payload.lead_state || "novo"}
-- Nome: ${profile.nome || "Nao informado"}
-- Nicho: ${profile.nicho || "Nao informado"}
-- Faturamento/Maturidade: ${profile.faturamento || "Nao informado"}
-- Dor principal: ${profile.dor_principal || "Nao informado"}
-- Desejo: ${profile.desejo || "Nao informado"}
-- Ultima objecao: ${profile.objecao || "Nenhuma"}
-- Temperatura: ${profile.temperatura || "frio"}
+- Nome: ${nome || "Nao informado"}
+- Nicho: ${nicho || "Nao informado"}
+- Faturamento/Maturidade: ${faturamento || "Nao informado"}
+- Dor principal: ${dor || "Nao informado"}
+- Desejo: ${desejo || "Nao informado"}
+- Ultima objecao: ${objecao || "Nenhuma"}
+- Temperatura: ${temperatura}
 - Contador de objecoes: ${payload.objecao_count || 0}
 - Fonte de entrada: ${payload.fonte_entrada || "Nao informado"}
 - Nome do usuario no Instagram: ${payload.user_name || "Nao informado"}
@@ -87,15 +199,15 @@ function buildLeadContext(payload) {
 
 Responda a ultima mensagem do lead considerando todo o contexto acima e o historico da conversa. Lembre-se: responda APENAS com o JSON no formato especificado, nada mais.
 
-${payload.lead_state === "novo" || payload.lead_state === "saudacao"
+${payload.lead_state === "novo" || payload.lead_state === "saudacao" || !payload.lead_state
     ? "ATENCAO: Esta e a primeira interacao ou o lead acabou de responder a saudacao. Seja acolhedor(a) e inicie a qualificacao de forma natural."
     : ""
-  }
+}
 
-${payload.objecao_count >= 2
+${(payload.objecao_count || 0) >= 2
     ? "ATENCAO: O lead ja apresentou objecoes " + payload.objecao_count + " vezes. Se apresentar a mesma objecao novamente, faca handoff humano."
     : ""
-  }
+}
 `.trim();
 }
 
@@ -103,108 +215,12 @@ ${payload.objecao_count >= 2
  * Parseia a resposta do Claude (que deve ser JSON)
  */
 function parseClaudeResponse(text) {
-  // Remove possíveis backticks de markdown
   let clean = text.trim();
-  if (clean.startsWith("```json")) {
-    clean = clean.slice(7);
-  }
-  if (clean.startsWith("```")) {
-    clean = clean.slice(3);
-  }
-  if (clean.endsWith("```")) {
-    clean = clean.slice(0, -3);
-  }
+  if (clean.startsWith("```json")) clean = clean.slice(7);
+  if (clean.startsWith("```")) clean = clean.slice(3);
+  if (clean.endsWith("```")) clean = clean.slice(0, -3);
   clean = clean.trim();
-
   return JSON.parse(clean);
-}
-
-/**
- * Converte a resposta do Claude no formato do ManyChat v2
- */
-function buildManyChatResponse(claudeData, updatedHistory) {
-  const actions = [];
-
-  // Atualiza lead_state
-  if (claudeData.lead_state) {
-    actions.push({
-      action: "set_field_value",
-      field_name: "lead_state",
-      value: claudeData.lead_state,
-    });
-  }
-
-  // Atualiza campos do lead
-  if (claudeData.lead_updates) {
-    const updates = claudeData.lead_updates;
-    const fieldMap = {
-      lead_nome: "lead_nome",
-      lead_nicho: "lead_nicho",
-      lead_faturamento: "lead_faturamento",
-      lead_dor_principal: "lead_dor_principal",
-      lead_desejo: "lead_desejo",
-      lead_objecao: "lead_objecao",
-      lead_temperatura: "lead_temperatura",
-    };
-
-    for (const [key, fieldName] of Object.entries(fieldMap)) {
-      if (updates[key] && updates[key] !== "null" && updates[key] !== null) {
-        actions.push({
-          action: "set_field_value",
-          field_name: fieldName,
-          value: updates[key],
-        });
-      }
-    }
-  }
-
-  // Atualiza historico da conversa
-  actions.push({
-    action: "set_field_value",
-    field_name: "conversation_history",
-    value: JSON.stringify(updatedHistory),
-  });
-
-  // Incrementa contador de objecoes se estiver em estado de objecao
-  if (claudeData.lead_state === "objecao") {
-    actions.push({
-      action: "set_field_value",
-      field_name: "objecao_count",
-      value: "{{objecao_count}} + 1",
-    });
-  }
-
-  // Adiciona tags baseadas na acao
-  if (claudeData.action === "handoff") {
-    actions.push({ action: "add_tag", tag_name: "handoff_solicitado" });
-  }
-  if (claudeData.action === "send_link") {
-    actions.push({ action: "add_tag", tag_name: "link_enviado" });
-    actions.push({ action: "add_tag", tag_name: "lead_quente" });
-  }
-  if (claudeData.action === "end" && claudeData.lead_state === "desqualificado") {
-    actions.push({ action: "add_tag", tag_name: "lead_desqualificado" });
-  }
-  if (claudeData.lead_updates?.lead_temperatura === "quente") {
-    actions.push({ action: "add_tag", tag_name: "lead_quente" });
-  }
-
-  // Monta a mensagem — substitui placeholder do link
-  let replyText = claudeData.reply || "Oi! Me da um instante que ja te respondo.";
-  replyText = replyText.replace(/\[LINK\]/g, LINK_PAGAMENTO);
-
-  return {
-    version: "v2",
-    content: {
-      messages: [
-        {
-          type: "text",
-          text: replyText,
-        },
-      ],
-      actions: actions,
-    },
-  };
 }
 
 // ============================================================
@@ -212,7 +228,7 @@ function buildManyChatResponse(claudeData, updatedHistory) {
 // ============================================================
 
 /**
- * Health check - para verificar se o servidor esta rodando
+ * Health check
  */
 app.get("/", (req, res) => {
   res.json({
@@ -233,16 +249,16 @@ app.post("/webhook", async (req, res) => {
   const startTime = Date.now();
 
   try {
-    const payload = req.body;
+    const payload = req.body || {};
 
     console.log("\n========================================");
     console.log(`[${new Date().toISOString()}] Nova mensagem recebida`);
-    console.log(`User: ${payload.user_name || "?"} | State: ${payload.lead_state || "novo"}`);
+    console.log(`User: ${payload.user_name || "?"} | ID: ${payload.user_id || "?"} | State: ${payload.lead_state || "novo"}`);
     console.log(`Mensagem: ${payload.last_message || "(vazio)"}`);
     console.log("========================================");
 
-    // Validacao basica
-    if (!payload.last_message && payload.lead_state !== "novo") {
+    // Se nao tem mensagem e nao e lead novo, resposta padrao
+    if (!payload.last_message && payload.lead_state && payload.lead_state !== "novo") {
       return res.json({
         version: "v2",
         content: {
@@ -253,7 +269,7 @@ app.post("/webhook", async (req, res) => {
     }
 
     // Se for lead novo sem mensagem, inicia saudacao
-    if (payload.lead_state === "novo" || !payload.lead_state) {
+    if (!payload.lead_state || payload.lead_state === "novo") {
       payload.lead_state = "saudacao";
       if (!payload.last_message) {
         payload.last_message = "(follow-back - primeiro contato)";
@@ -281,7 +297,6 @@ app.post("/webhook", async (req, res) => {
 
     const response = await Promise.race([claudePromise, timeoutPromise]);
 
-    // Extrai texto da resposta
     const responseText = response.content
       .filter((block) => block.type === "text")
       .map((block) => block.text)
@@ -297,7 +312,6 @@ app.post("/webhook", async (req, res) => {
       console.error("Erro ao parsear resposta do Claude:", parseError.message);
       console.error("Resposta bruta:", responseText);
 
-      // Fallback: usa o texto bruto como resposta
       claudeData = {
         reply: responseText.substring(0, 500),
         lead_state: payload.lead_state,
@@ -308,29 +322,49 @@ app.post("/webhook", async (req, res) => {
       };
     }
 
-    // Atualiza historico com a resposta do assistant
-    const updatedHistory = [...conversationMessages];
-    updatedHistory.push({
-      role: "assistant",
-      content: claudeData.reply,
-    });
+    // Guarda o count atual para incrementar
+    claudeData.current_objecao_count = parseInt(payload.objecao_count) || 0;
 
-    // Mantém apenas as ultimas 10
-    const trimmedHistory = updatedHistory.slice(-10);
+    // ATUALIZA CAMPOS NO MANYCHAT VIA API (sem precisar de mapeamento)
+    const subscriberId = payload.user_id;
+    if (subscriberId && MANYCHAT_API_TOKEN) {
+      // Atualiza historico da conversa
+      const updatedHistory = [...conversationMessages];
+      updatedHistory.push({ role: "assistant", content: claudeData.reply });
+      const trimmedHistory = updatedHistory.slice(-10);
 
-    // Monta resposta para o ManyChat
-    const manychatResponse = buildManyChatResponse(claudeData, trimmedHistory);
+      // Seta conversation_history no ManyChat
+      await setManyChatField(subscriberId, "conversation_history", JSON.stringify(trimmedHistory));
+
+      // Atualiza todos os outros campos
+      await updateManyChatLead(subscriberId, claudeData);
+    }
+
+    // Monta resposta simples para o ManyChat (so a mensagem)
+    let replyText = claudeData.reply || "Oi! Me da um instante que ja te respondo.";
+    replyText = replyText.replace(/\[LINK\]/g, LINK_PAGAMENTO);
 
     console.log(`Action: ${claudeData.action} | New State: ${claudeData.lead_state}`);
-    console.log(`Resposta: ${claudeData.reply.substring(0, 100)}...`);
+    console.log(`Resposta: ${replyText.substring(0, 100)}...`);
 
-    return res.json(manychatResponse);
+    // Retorna apenas a mensagem - os campos ja foram atualizados via API
+    return res.json({
+      version: "v2",
+      content: {
+        messages: [
+          {
+            type: "text",
+            text: replyText,
+          },
+        ],
+        actions: [],
+      },
+    });
 
   } catch (error) {
     console.error("ERRO no webhook:", error.message);
 
-    // Resposta de fallback para nao deixar o lead sem resposta
-    const fallbackResponse = {
+    return res.json({
       version: "v2",
       content: {
         messages: [
@@ -339,16 +373,9 @@ app.post("/webhook", async (req, res) => {
             text: "Oi! Deixa eu verificar uma coisa aqui e ja te respondo, ta? Me manda sua duvida de novo em alguns minutinhos 😊",
           },
         ],
-        actions: [
-          {
-            action: "add_tag",
-            tag_name: "erro_webhook",
-          },
-        ],
+        actions: [],
       },
-    };
-
-    return res.json(fallbackResponse);
+    });
   }
 });
 
@@ -360,7 +387,8 @@ app.listen(PORT, () => {
   console.log(`\n🚀 SDR Amanda Mecenas - Webhook rodando na porta ${PORT}`);
   console.log(`📡 Endpoint: http://localhost:${PORT}/webhook`);
   console.log(`💚 Health check: http://localhost:${PORT}/health`);
-  console.log(`🔑 API Key configurada: ${process.env.ANTHROPIC_API_KEY ? "SIM" : "⚠️  NAO - configure a ANTHROPIC_API_KEY"}`);
+  console.log(`🔑 API Key Claude: ${process.env.ANTHROPIC_API_KEY ? "SIM" : "⚠️  NAO"}`);
+  console.log(`🔑 API Token ManyChat: ${MANYCHAT_API_TOKEN ? "SIM" : "⚠️  NAO"}`);
   console.log(`🔗 Link pagamento: ${LINK_PAGAMENTO}`);
   console.log("-------------------------------------------\n");
 });
