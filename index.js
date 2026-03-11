@@ -38,7 +38,7 @@ async function setManyChatField(subscriberId, fieldName, value) {
   if (!MANYCHAT_API_TOKEN || !subscriberId || !value || value === "null") return;
 
   try {
-    const response = await fetch("https://api.manychat.com/fb/subscriber/setCustomField", {
+    const response = await fetch("https://api.manychat.com/ig/subscriber/setCustomField", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
@@ -52,7 +52,8 @@ async function setManyChatField(subscriberId, fieldName, value) {
     });
 
     if (!response.ok) {
-      console.warn(`ManyChat API erro ao setar ${fieldName}:`, response.status);
+      const errorBody = await response.text().catch(() => "");
+      console.warn(`ManyChat API erro ao setar ${fieldName}:`, response.status, errorBody);
     }
   } catch (error) {
     console.warn(`ManyChat API erro ao setar ${fieldName}:`, error.message);
@@ -66,7 +67,7 @@ async function addManyChatTag(subscriberId, tagName) {
   if (!MANYCHAT_API_TOKEN || !subscriberId) return;
 
   try {
-    const response = await fetch("https://api.manychat.com/fb/subscriber/addTagByName", {
+    const response = await fetch("https://api.manychat.com/ig/subscriber/addTagByName", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
@@ -353,7 +354,7 @@ app.post("/webhook", async (req, res) => {
     // ENVIA A MENSAGEM DIRETO PELA API DO MANYCHAT (sem depender do bloco Dinâmico)
     if (subscriberId && MANYCHAT_API_TOKEN) {
       try {
-        const sendResponse = await fetch("https://api.manychat.com/fb/sending/sendContent", {
+        const sendResponse = await fetch("https://api.manychat.com/ig/sending/sendContent", {
           method: "POST",
           headers: {
             "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
@@ -377,7 +378,8 @@ app.post("/webhook", async (req, res) => {
         if (sendResponse.ok) {
           console.log(`[ManyChat] Mensagem enviada diretamente ao lead!`);
         } else {
-          console.warn(`[ManyChat] Erro ao enviar mensagem:`, sendResponse.status);
+          const errorBody = await sendResponse.text().catch(() => "");
+          console.warn(`[ManyChat] Erro ao enviar mensagem:`, sendResponse.status, errorBody);
         }
       } catch (sendError) {
         console.warn(`[ManyChat] Erro ao enviar mensagem:`, sendError.message);
