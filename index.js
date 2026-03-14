@@ -422,7 +422,6 @@ app.post("/webhook", async (req, res) => {
     claudeData.current_objecao_count = parseInt(payload.objecao_count) || 0;
 
     // ATUALIZA CAMPOS NO MANYCHAT VIA API (sem precisar de mapeamento)
-    const subscriberId = payload.user_id;
     if (subscriberId && MANYCHAT_API_TOKEN) {
       // Atualiza historico da conversa
       const updatedHistory = [...conversationMessages];
