@@ -32,6 +32,51 @@ const TIMEOUT_MS = 25000;
 // ============================================================
 
 /**
+ * BUSCA os dados atuais do lead no ManyChat via API
+ * Isso garante que temos os dados mais recentes, mesmo que o Body do ManyChat nao envie
+ */
+async function getManyChatSubscriber(subscriberId) {
+  if (!MANYCHAT_API_TOKEN || !subscriberId) return null;
+
+  try {
+    const response = await fetch(`https://api.manychat.com/fb/subscriber/getInfo?subscriber_id=${subscriberId}`, {
+      method: "GET",
+      headers: {
+        "Authorization": `Bearer ${MANYCHAT_API_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      if (data.status === "success" && data.data) {
+        const subscriber = data.data;
+        const fields = {};
+
+        // Extrair custom fields do subscriber
+        if (subscriber.custom_fields) {
+          for (const field of subscriber.custom_fields) {
+            if (field.name && field.value !== null && field.value !== undefined) {
+              fields[field.name] = String(field.value);
+            }
+          }
+        }
+
+        console.log(`[ManyChat] Dados do subscriber ${subscriberId} carregados:`, Object.keys(fields).filter(k => fields[k] && fields[k] !== "").length, "campos preenchidos");
+        return fields;
+      }
+    } else {
+      const errorBody = await response.text().catch(() => "");
+      console.warn(`[ManyChat] Erro ao buscar subscriber ${subscriberId}:`, response.status, errorBody);
+    }
+  } catch (error) {
+    console.warn(`[ManyChat] Erro ao buscar subscriber:`, error.message);
+  }
+
+  return null;
+}
+
+/**
  * Atualiza um Custom Field do lead no ManyChat via API
  */
 async function setManyChatField(subscriberId, fieldName, value) {
@@ -297,6 +342,33 @@ app.post("/webhook", async (req, res) => {
       payload.lead_state = "saudacao";
       if (!payload.last_message) {
         payload.last_message = "(follow-back - primeiro contato)";
+      }
+    }
+
+    // BUSCA DADOS ATUALIZADOS DO LEAD NO MANYCHAT (garante memoria)
+    const subscriberId = payload.user_id;
+    if (subscriberId && MANYCHAT_API_TOKEN) {
+      const savedFields = await getManyChatSubscriber(subscriberId);
+      if (savedFields) {
+        // Preenche o payload com os dados salvos (prioridade para dados do ManyChat)
+        const fieldMapping = [
+          "lead_nome", "lead_nicho", "lead_faturamento", "lead_dor_principal",
+          "lead_desejo", "lead_objecao", "lead_temperatura", "lead_state",
+          "lead_empresas", "lead_produtos_servicos", "lead_tamanho_equipe",
+          "lead_redes_sociais", "lead_objetivo_curto", "lead_objetivo_longo",
+          "lead_ferramentas", "lead_historico_amanda", "conversation_history",
+          "objecao_count", "fonte_entrada", "sdr_resposta"
+        ];
+        for (const field of fieldMapping) {
+          if (savedFields[field] && savedFields[field] !== "" && savedFields[field] !== "null") {
+            payload[field] = savedFields[field];
+          }
+        }
+        // Usar lead_state do ManyChat se existir e nao for vazio
+        if (savedFields.lead_state && savedFields.lead_state !== "" && savedFields.lead_state !== "novo") {
+          payload.lead_state = savedFields.lead_state;
+        }
+        console.log(`[Memoria] Lead state: ${payload.lead_state} | Nome: ${payload.lead_nome || "?"} | Nicho: ${payload.lead_nicho || "?"}`);
       }
     }
 
