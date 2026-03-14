@@ -180,28 +180,51 @@ function buildLeadContext(payload) {
   const desejo = profile.desejo || payload.lead_desejo || "";
   const objecao = profile.objecao || payload.lead_objecao || "";
   const temperatura = profile.temperatura || payload.lead_temperatura || "frio";
+  const empresas = payload.lead_empresas || "";
+  const produtosServicos = payload.lead_produtos_servicos || "";
+  const tamanhoEquipe = payload.lead_tamanho_equipe || "";
+  const redesSociais = payload.lead_redes_sociais || "";
+  const objetivoCurto = payload.lead_objetivo_curto || "";
+  const objetivoLongo = payload.lead_objetivo_longo || "";
+  const ferramentas = payload.lead_ferramentas || "";
+  const historicoAmanda = payload.lead_historico_amanda || "";
 
   return `
-# CONTEXTO DO LEAD (DADOS ATUAIS)
+# CONTEXTO DO LEAD (DADOS ATUAIS - MEMORIA)
 
+## Dados Basicos
 - Estado atual do funil: ${payload.lead_state || "novo"}
 - Nome: ${nome || "Nao informado"}
-- Nicho: ${nicho || "Nao informado"}
-- Faturamento/Maturidade: ${faturamento || "Nao informado"}
-- Dor principal: ${dor || "Nao informado"}
-- Desejo: ${desejo || "Nao informado"}
-- Ultima objecao: ${objecao || "Nenhuma"}
+- Nome no Instagram: ${payload.user_name || "Nao informado"}
 - Temperatura: ${temperatura}
 - Contador de objecoes: ${payload.objecao_count || 0}
 - Fonte de entrada: ${payload.fonte_entrada || "Nao informado"}
-- Nome do usuario no Instagram: ${payload.user_name || "Nao informado"}
+
+## Perfil Profissional
+- Nicho/Segmento: ${nicho || "Nao informado"}
+- Empresas: ${empresas || "Nao informado"}
+- Produtos/Servicos que vende: ${produtosServicos || "Nao informado"}
+- Faturamento: ${faturamento || "Nao informado"}
+- Tamanho da equipe: ${tamanhoEquipe || "Nao informado"}
+- Redes sociais/canais: ${redesSociais || "Nao informado"}
+- Ferramentas que usa: ${ferramentas || "Nao informado"}
+
+## Dores e Desejos
+- Dor principal: ${dor || "Nao informado"}
+- Desejo principal: ${desejo || "Nao informado"}
+- Objetivo curto prazo: ${objetivoCurto || "Nao informado"}
+- Objetivo longo prazo: ${objetivoLongo || "Nao informado"}
+- Ultima objecao: ${objecao || "Nenhuma"}
+
+## Historico com Amanda
+- Compras/interacoes anteriores: ${historicoAmanda || "Nao informado"}
 
 # INSTRUCAO PARA ESTA MENSAGEM
 
-Responda a ultima mensagem do lead considerando todo o contexto acima e o historico da conversa. Lembre-se: responda APENAS com o JSON no formato especificado, nada mais.
+Responda a ultima mensagem do lead considerando todo o contexto acima e o historico da conversa. Use as informacoes da memoria para PERSONALIZAR sua resposta. Lembre-se: responda APENAS com o JSON no formato especificado, nada mais.
 
 ${payload.lead_state === "novo" || payload.lead_state === "saudacao" || !payload.lead_state
-    ? "ATENCAO: Esta e a primeira interacao ou o lead acabou de responder a saudacao. Seja acolhedor(a) e inicie a qualificacao de forma natural."
+    ? "ATENCAO: Esta e a primeira interacao ou o lead acabou de responder a saudacao. Seja acolhedor(a) e inicie a qualificacao de forma natural. VARIE a saudacao."
     : ""
 }
 
