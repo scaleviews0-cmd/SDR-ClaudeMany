@@ -396,7 +396,9 @@ app.post("/webhook", async (req, res) => {
     updatedHistory.push({ role: "assistant", content: claudeData.reply });
     updateLeadData(userId, updates, updatedHistory.slice(-15), userName);
 
-    let replyText = (claudeData.reply || "E ai, tudo certo?").replace(/\[LINK\]/g, LINK_PAGAMENTO);
+    let replyText = (claudeData.reply || "E aí... tudo certo?")
+      .replace(/\[LINK\]/g, LINK_PAGAMENTO)
+      .replace(/\[CALENDLY\]/g, "https://calendly.com/scaleviews0/30min");
 
     // DELAY DE DIGITACAO (simula pessoa real)
     const typingDelay = calculateTypingDelay(replyText);
@@ -410,6 +412,7 @@ app.post("/webhook", async (req, res) => {
       await sendManyChatMessage(userId, replyText);
       if (claudeData.action === "handoff") await addManyChatTag(userId, "handoff_solicitado");
       if (claudeData.action === "send_link") { await addManyChatTag(userId, "link_enviado"); await addManyChatTag(userId, "lead_quente"); }
+      if (claudeData.action === "send_calendly") { await addManyChatTag(userId, "mentoria_individual"); await addManyChatTag(userId, "lead_quente"); }
     }
 
     return res.json({ version: "v2", content: { messages: [{ type: "text", text: replyText }], actions: [] } });
