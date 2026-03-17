@@ -11,26 +11,25 @@ app.use(express.json());
 
 const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 const SYSTEM_PROMPT = fs.readFileSync(path.join(__dirname, "system-prompt.txt"), "utf-8");
-const LINK_PAGAMENTO = process.env.LINK_PAGAMENTO || "https://seu-link-aqui.com";
+const LINK_PAGAMENTO = process.env.LINK_PAGAMENTO || "https://circle.visionairebusinesslegacy.com";
 const MANYCHAT_API_TOKEN = process.env.MANYCHAT_API_TOKEN;
 const PORT = process.env.PORT || 3000;
 const TIMEOUT_MS = 25000;
 
 // ============================================================
-// MEMORIA LOCAL - ARQUIVO JSON (nao depende do ManyChat)
+// MEMORIA LOCAL
 // ============================================================
 const MEMORY_FILE = path.join(__dirname, "leads_memory.json");
 
 function loadMemory() {
-  try {
-    if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf-8"));
-  } catch (e) { console.warn("Erro ao carregar memoria:", e.message); }
+  try { if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf-8")); }
+  catch (e) { console.warn("Erro memoria:", e.message); }
   return {};
 }
 
 function saveMemory(memory) {
   try { fs.writeFileSync(MEMORY_FILE, JSON.stringify(memory, null, 2)); }
-  catch (e) { console.warn("Erro ao salvar memoria:", e.message); }
+  catch (e) { console.warn("Erro salvar:", e.message); }
 }
 
 function getLeadData(userId) {
@@ -44,6 +43,7 @@ function getLeadData(userId) {
     lead_state: "novo", objecao_count: 0, conversation_history: [],
     fonte_entrada: "", user_name: "",
     created_at: new Date().toISOString(), last_interaction: new Date().toISOString(),
+    followup_sent: false,
   };
 }
 
@@ -64,18 +64,16 @@ function updateLeadData(userId, updates, conversationHistory, userName) {
 
   if (conversationHistory) existing.conversation_history = conversationHistory;
   existing.last_interaction = new Date().toISOString();
+  existing.followup_sent = false;
   if (userName) existing.user_name = userName;
 
   memory[userId] = existing;
   saveMemory(memory);
-
-  const filled = Object.entries(existing).filter(([k, v]) => v && v !== "" && v !== "frio" && v !== "novo" && v !== 0 && !["created_at", "last_interaction", "conversation_history"].includes(k)).length;
-  console.log(`[MEMORIA] Lead ${userId} salvo com ${filled} campos preenchidos`);
   return existing;
 }
 
 // ============================================================
-// MANYCHAT API - ENVIAR MENSAGEM
+// MANYCHAT API
 // ============================================================
 async function sendManyChatMessage(subscriberId, text) {
   if (!MANYCHAT_API_TOKEN || !subscriberId) return false;
@@ -88,9 +86,9 @@ async function sendManyChatMessage(subscriberId, text) {
         data: { version: "v2", content: { type: "instagram", messages: [{ type: "text", text }] } },
       }),
     });
-    if (r.ok) { console.log("[ManyChat] Mensagem enviada!"); return true; }
-    else { const e = await r.text().catch(() => ""); console.warn("[ManyChat] Erro:", r.status, e.substring(0, 200)); return false; }
-  } catch (e) { console.warn("[ManyChat] Erro:", e.message); return false; }
+    if (r.ok) { console.log("[MSG ENVIADA]"); return true; }
+    else { const e = await r.text().catch(() => ""); console.warn("[MSG ERRO]", r.status, e.substring(0, 200)); return false; }
+  } catch (e) { console.warn("[MSG ERRO]", e.message); return false; }
 }
 
 async function addManyChatTag(subscriberId, tagName) {
@@ -101,11 +99,27 @@ async function addManyChatTag(subscriberId, tagName) {
       headers: { "Authorization": "Bearer " + MANYCHAT_API_TOKEN, "Content-Type": "application/json" },
       body: JSON.stringify({ subscriber_id: Number(subscriberId), tag_name: tagName }),
     });
-  } catch (e) { /* silencioso */ }
+  } catch (e) { /* ok */ }
 }
 
 // ============================================================
-// CONTEXTO PARA O CLAUDE
+// DELAY DE DIGITACAO (simula pessoa digitando)
+// ============================================================
+function calculateTypingDelay(text) {
+  const words = text.split(" ").length;
+  // Base: 1.5 a 4 segundos + 0.3s por palavra (simula leitura + digitacao)
+  const base = 1500 + Math.random() * 2500;
+  const perWord = words * 300;
+  const total = Math.min(base + perWord, 8000); // max 8 segundos
+  return Math.floor(total);
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// ============================================================
+// CONTEXTO PARA CLAUDE
 // ============================================================
 function buildMessages(history, lastMessage) {
   let msgs = [];
@@ -121,51 +135,39 @@ function buildContext(lead) {
   const dias = lead.last_interaction ? Math.floor((Date.now() - new Date(lead.last_interaction).getTime()) / 86400000) : 0;
 
   let ctx = `
-# MEMORIA COMPLETA DO LEAD
+# MEMORIA DO LEAD
 
 ## Basico
-- Estado: ${lead.lead_state || "novo"}
-- Nome: ${lead.lead_nome || "Nao informado"}
-- Instagram: ${lead.user_name || "Nao informado"}
-- Temperatura: ${lead.lead_temperatura || "frio"}
-- Objecoes: ${lead.objecao_count || 0}x
-- Fonte: ${lead.fonte_entrada || "Nao informado"}
-- Dias sem interacao: ${dias}
+- Estado: ${lead.lead_state || "novo"} | Nome: ${lead.lead_nome || "?"} | IG: ${lead.user_name || "?"} | Temp: ${lead.lead_temperatura || "frio"} | Objecoes: ${lead.objecao_count || 0}x | Dias sem falar: ${dias}
 
 ## Profissional
-- Nicho: ${lead.lead_nicho || "Nao informado"}
-- Empresas: ${lead.lead_empresas || "Nao informado"}
-- Produtos/Servicos: ${lead.lead_produtos_servicos || "Nao informado"}
-- Faturamento: ${lead.lead_faturamento || "Nao informado"}
-- Equipe: ${lead.lead_tamanho_equipe || "Nao informado"}
-- Redes: ${lead.lead_redes_sociais || "Nao informado"}
-- Ferramentas: ${lead.lead_ferramentas || "Nao informado"}
+- Nicho: ${lead.lead_nicho || "?"}
+- Empresas: ${lead.lead_empresas || "?"}
+- Produtos: ${lead.lead_produtos_servicos || "?"}
+- Faturamento: ${lead.lead_faturamento || "?"}
+- Equipe: ${lead.lead_tamanho_equipe || "?"}
+- Redes: ${lead.lead_redes_sociais || "?"}
+- Ferramentas: ${lead.lead_ferramentas || "?"}
 
-## Dores e Objetivos
-- Dor: ${lead.lead_dor_principal || "Nao informado"}
-- Desejo: ${lead.lead_desejo || "Nao informado"}
-- Objetivo curto prazo: ${lead.lead_objetivo_curto || "Nao informado"}
-- Objetivo longo prazo: ${lead.lead_objetivo_longo || "Nao informado"}
-- Objecao: ${lead.lead_objecao || "Nenhuma"}
-
-## Historico Amanda
-- Compras: ${lead.lead_historico_amanda || "Nao informado"}
+## Objetivos e Dores
+- Dor: ${lead.lead_dor_principal || "?"} | Desejo: ${lead.lead_desejo || "?"}
+- Curto prazo: ${lead.lead_objetivo_curto || "?"} | Longo prazo: ${lead.lead_objetivo_longo || "?"}
+- Objecao: ${lead.lead_objecao || "nenhuma"}
+- Historico Amanda: ${lead.lead_historico_amanda || "?"}
 
 # INSTRUCOES`;
 
   if (dias > 3 && lead.lead_nome) {
-    ctx += `\nATENCAO: Lead voltou apos ${dias} dias. Retome naturalmente: "Opa ${lead.lead_nome}! Da ultima vez a gente conversou sobre ${lead.lead_dor_principal || lead.lead_nicho || 'seu negocio'}..."`;
+    ctx += `\nLead voltou apos ${dias} dias. Retome naturalmente referenciando conversa anterior.`;
   }
   if (!lead.lead_state || lead.lead_state === "novo" || lead.lead_state === "saudacao") {
-    ctx += "\nPrimeira interacao ou inicio. Seja acolhedor(a). VARIE a saudacao.";
+    ctx += "\nInicio de conversa. Seja natural e direta. VARIE a abordagem.";
   }
   if ((lead.objecao_count || 0) >= 2) {
-    ctx += `\nLead com ${lead.objecao_count} objecoes. Se repetir, faca handoff.`;
+    ctx += `\nLead com ${lead.objecao_count} objecoes. Se repetir, handoff.`;
   }
-
-  ctx += "\n\nREGRA CRITICA: Se um campo acima NAO esta como 'Nao informado', NUNCA pergunte sobre ele. Use a info para personalizar.";
-  ctx += "\nResponda APENAS com JSON no formato especificado.";
-
+  ctx += "\nSe um campo acima tem info (nao e '?'), NUNCA pergunte sobre isso. Use para personalizar.";
+  ctx += "\nResponda APENAS JSON no formato especificado.";
   return ctx;
 }
 
@@ -178,21 +180,160 @@ function parseResponse(text) {
 }
 
 // ============================================================
+// FOLLOW-UPS AUTOMATICOS (QUARTA + QUINTA)
+// ============================================================
+
+// Quinta-feira: Visionaire Circle (4 variacoes - 1 por semana do mes)
+const QUINTA_MSGS = [
+  // Semana 1 - Foco em NETWORKING
+  "Essa semana tem aula ao vivo na Visionaire Circle. O mais valioso nem e so o conteudo — e estar na mesma sala que empresarios que estao escalando de verdade. Quem ta dentro, ta junto. Se quiser conhecer: circle.visionairebusinesslegacy.com",
+  // Semana 2 - Foco em IMPLEMENTACAO
+  "Toda semana na Visionaire Circle a gente senta pra implementar, nao pra assistir aula passivamente. E o unico lugar onde voce sai com estrategia aplicada no mesmo dia. Se fizer sentido pra voce: circle.visionairebusinesslegacy.com",
+  // Semana 3 - Foco em RESULTADO
+  "Mais uma semana de aula ao vivo na Visionaire Circle. Empresarios la dentro estao dobrando faturamento, montando equipe e saindo do operacional. Se voce quer esse tipo de resultado: circle.visionairebusinesslegacy.com",
+  // Semana 4 - Foco em EXCLUSIVIDADE
+  "A Visionaire Circle nao e pra todo mundo — e pra quem leva a serio crescer como empresario. Toda semana tem aula ao vivo, networking e implementacao real. Se voce e esse tipo de pessoa: circle.visionairebusinesslegacy.com",
+];
+
+// Quarta-feira: Aula bonus gratuita (4 variacoes - 1 por semana do mes)
+const QUARTA_MSGS = [
+  // Semana 1 - Foco em OPORTUNIDADE
+  "Separei uma aula especial pra quem quer escalar no digital. E de graca e vale mais do que muito curso pago por ai. Assiste e depois me fala o que achou: https://www.youtube.com/watch?v=4KRaiesZmhk&t=1059s",
+  // Semana 2 - Foco em DOR
+  "Se voce sente que seu negocio podia estar num nivel maior mas nao sabe qual o proximo passo, essa aula vai te dar clareza. E uma aula bonus que gravei pra ajudar empresarios como voce: https://www.youtube.com/watch?v=4KRaiesZmhk&t=1059s",
+  // Semana 3 - Foco em PROVA
+  "Muita gente que assistiu essa aula me mandou mensagem dizendo que mudou a forma de enxergar o negocio. E uma aula especial bonus sobre escalar no digital. Veja e me conta o que achou: https://www.youtube.com/watch?v=4KRaiesZmhk&t=1059s",
+  // Semana 4 - Foco em URGENCIA
+  "Vou te mandar um conteudo que normalmente so compartilho com quem e proximo. E uma aula bonus sobre como escalar no digital de forma estrategica. Assiste enquanto ta disponivel: https://www.youtube.com/watch?v=4KRaiesZmhk&t=1059s",
+];
+
+function getWeekOfMonth() {
+  const now = new Date();
+  const firstDay = new Date(now.getFullYear(), now.getMonth(), 1);
+  return Math.ceil((now.getDate() + firstDay.getDay()) / 7) - 1; // 0-3
+}
+
+async function sendFollowUps(dayType) {
+  const messages = dayType === "quinta" ? QUINTA_MSGS : QUARTA_MSGS;
+  const weekIndex = getWeekOfMonth() % messages.length;
+  const baseMsg = messages[weekIndex];
+  const label = dayType === "quinta" ? "VISIONAIRE CIRCLE" : "AULA BONUS";
+
+  console.log(`\n[FOLLOW-UP ${label}] Semana ${weekIndex + 1} do mes`);
+
+  const memory = loadMemory();
+  const followupKey = dayType === "quinta" ? "followup_quinta" : "followup_quarta";
+  let sent = 0;
+
+  for (const [userId, lead] of Object.entries(memory)) {
+    // Pular se ja enviou esse follow-up essa semana
+    if (lead[followupKey]) continue;
+
+    const diasSemFalar = lead.last_interaction
+      ? Math.floor((Date.now() - new Date(lead.last_interaction).getTime()) / 86400000)
+      : 999;
+
+    const temConversa = lead.conversation_history && lead.conversation_history.length > 0;
+    const naoDesqualificado = lead.lead_state !== "desqualificado";
+
+    // Envia para quem tem conversa e 2+ dias sem falar
+    if (temConversa && diasSemFalar >= 2 && naoDesqualificado) {
+      const personalizada = lead.lead_nome
+        ? `${lead.lead_nome}, ${baseMsg.charAt(0).toLowerCase() + baseMsg.slice(1)}`
+        : baseMsg;
+
+      const success = await sendManyChatMessage(userId, personalizada);
+      if (success) {
+        lead[followupKey] = true;
+        if (!lead.conversation_history) lead.conversation_history = [];
+        lead.conversation_history.push({ role: "assistant", content: personalizada });
+        memory[userId] = lead;
+        sent++;
+        console.log(`[FOLLOW-UP] -> ${lead.lead_nome || userId}`);
+        await delay(3000); // 3s entre envios
+      }
+    }
+  }
+
+  saveMemory(memory);
+  console.log(`[FOLLOW-UP ${label}] ${sent} enviados\n`);
+  return sent;
+}
+
+async function checkFollowUps() {
+  const now = new Date();
+  const day = now.getDay(); // 0=dom, 3=qua, 4=qui
+  const hour = now.getHours();
+
+  // Quarta-feira 10h
+  if (day === 3 && hour === 10) {
+    await sendFollowUps("quarta");
+  }
+  // Quinta-feira 10h
+  if (day === 4 && hour === 10) {
+    await sendFollowUps("quinta");
+  }
+
+  // Reset dos flags no domingo (pra permitir novos follow-ups na proxima semana)
+  if (day === 0 && hour === 3) {
+    const memory = loadMemory();
+    for (const userId of Object.keys(memory)) {
+      memory[userId].followup_quinta = false;
+      memory[userId].followup_quarta = false;
+    }
+    saveMemory(memory);
+    console.log("[FOLLOW-UP] Flags resetados para nova semana");
+  }
+}
+
+// Checa a cada hora
+setInterval(checkFollowUps, 60 * 60 * 1000);
+
+// ============================================================
+setInterval(runThursdayFollowUps, 60 * 60 * 1000);
+
+// ============================================================
 // ROTAS
 // ============================================================
 app.get("/", (req, res) => {
-  res.json({ status: "online", service: "SDR Amanda Mecenas v3", leads: Object.keys(loadMemory()).length });
+  res.json({ status: "online", service: "SDR Amanda Mecenas v4", leads: Object.keys(loadMemory()).length });
 });
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 app.get("/lead/:id", (req, res) => res.json(getLeadData(req.params.id)));
 app.get("/leads", (req, res) => {
   const mem = loadMemory();
   const summary = Object.entries(mem).map(([id, d]) => ({
-    id, nome: d.lead_nome, nicho: d.lead_nicho, state: d.lead_state, temp: d.lead_temperatura, last: d.last_interaction
+    id, nome: d.lead_nome, nicho: d.lead_nicho, state: d.lead_state,
+    temp: d.lead_temperatura, last: d.last_interaction, followup: d.followup_sent
   }));
   res.json(summary);
 });
 
+// Endpoint manual para testar follow-ups
+app.get("/followup/test", async (req, res) => {
+  const memory = loadMemory();
+  const elegiveis = [];
+  for (const [userId, lead] of Object.entries(memory)) {
+    const dias = lead.last_interaction ? Math.floor((Date.now() - new Date(lead.last_interaction).getTime()) / 86400000) : 999;
+    const temConversa = lead.conversation_history && lead.conversation_history.length > 0;
+    if (temConversa && dias >= 2 && lead.lead_state !== "desqualificado") {
+      elegiveis.push({ id: userId, nome: lead.lead_nome, dias, state: lead.lead_state, temp: lead.lead_temperatura, quinta: lead.followup_quinta || false, quarta: lead.followup_quarta || false });
+    }
+  }
+  res.json({ elegiveis, total: elegiveis.length, semana_do_mes: getWeekOfMonth() + 1 });
+});
+
+// Dispara follow-ups manualmente (quarta ou quinta)
+app.post("/followup/send/:type", async (req, res) => {
+  const type = req.params.type; // "quarta" ou "quinta"
+  if (!["quarta", "quinta"].includes(type)) return res.json({ error: "Use /followup/send/quarta ou /followup/send/quinta" });
+  const sent = await sendFollowUps(type);
+  res.json({ tipo: type, enviados: sent });
+});
+
+// ============================================================
+// WEBHOOK PRINCIPAL
+// ============================================================
 app.post("/webhook", async (req, res) => {
   const startTime = Date.now();
   try {
@@ -200,20 +341,26 @@ app.post("/webhook", async (req, res) => {
     const userId = payload.user_id || "unknown";
     const userName = payload.user_name || "";
     const lastMessage = payload.last_message || "";
+    const fonte = payload.fonte_entrada || "";
 
-    // CARREGA MEMORIA
+    // IGNORA respostas de story (Amanda faz manualmente)
+    if (fonte === "story" || fonte === "story_reply" || fonte === "stories") {
+      console.log(`[IGNORADO] Resposta de story de ${userName}`);
+      return res.json({ version: "v2", content: { messages: [], actions: [] } });
+    }
+
     const leadData = getLeadData(userId);
     if (userName && !leadData.user_name) leadData.user_name = userName;
-    if (payload.fonte_entrada && !leadData.fonte_entrada) leadData.fonte_entrada = payload.fonte_entrada;
+    if (fonte && !leadData.fonte_entrada) leadData.fonte_entrada = fonte;
 
     console.log("\n========================================");
-    console.log(`MENSAGEM | User: ${leadData.lead_nome || userName || "?"} | ID: ${userId}`);
+    console.log(`MSG | ${leadData.lead_nome || userName || "?"} (${userId})`);
     console.log(`State: ${leadData.lead_state} | Nicho: ${leadData.lead_nicho || "?"} | Temp: ${leadData.lead_temperatura}`);
-    console.log(`Msg: "${lastMessage}"`);
+    console.log(`"${lastMessage}"`);
     console.log("========================================");
 
     if (!lastMessage && leadData.lead_state && leadData.lead_state !== "novo") {
-      return res.json({ version: "v2", content: { messages: [{ type: "text", text: "Oi! Como posso te ajudar?" }], actions: [] } });
+      return res.json({ version: "v2", content: { messages: [{ type: "text", text: "E ai, tudo bem?" }], actions: [] } });
     }
 
     if (!leadData.lead_state || leadData.lead_state === "novo") leadData.lead_state = "saudacao";
@@ -247,8 +394,14 @@ app.post("/webhook", async (req, res) => {
     updatedHistory.push({ role: "assistant", content: claudeData.reply });
     updateLeadData(userId, updates, updatedHistory.slice(-15), userName);
 
-    let replyText = (claudeData.reply || "Oi! Ja te respondo.").replace(/\[LINK\]/g, LINK_PAGAMENTO);
-    console.log(`Action: ${claudeData.action} | State: ${claudeData.lead_state} | Reply: ${replyText.substring(0, 100)}...`);
+    let replyText = (claudeData.reply || "E ai, tudo certo?").replace(/\[LINK\]/g, LINK_PAGAMENTO);
+
+    // DELAY DE DIGITACAO (simula pessoa real)
+    const typingDelay = calculateTypingDelay(replyText);
+    console.log(`[Delay ${typingDelay}ms] Action: ${claudeData.action} | State: ${claudeData.lead_state}`);
+    console.log(`Reply: ${replyText.substring(0, 120)}...`);
+
+    await delay(typingDelay);
 
     // ENVIA
     if (userId !== "unknown" && MANYCHAT_API_TOKEN) {
@@ -261,15 +414,20 @@ app.post("/webhook", async (req, res) => {
 
   } catch (error) {
     console.error("ERRO:", error.message);
-    return res.json({ version: "v2", content: { messages: [{ type: "text", text: "Oi! Me manda de novo em alguns minutinhos 😊" }], actions: [] } });
+    return res.json({ version: "v2", content: { messages: [{ type: "text", text: "Da um minuto que ja te respondo" }], actions: [] } });
   }
 });
 
+// ============================================================
+// INICIAR
+// ============================================================
 app.listen(PORT, () => {
   const mem = loadMemory();
-  console.log(`\n🚀 SDR Amanda Mecenas v3.0 - MEMORIA DEFINITIVA`);
+  console.log(`\n🚀 SDR Amanda v4.0 — Visionaire Business Legacy`);
   console.log(`📡 http://localhost:${PORT}/webhook`);
   console.log(`🔑 Claude: ${process.env.ANTHROPIC_API_KEY ? "OK" : "FALTA"} | ManyChat: ${MANYCHAT_API_TOKEN ? "OK" : "FALTA"}`);
-  console.log(`🧠 Leads na memoria: ${Object.keys(mem).length}`);
-  console.log(`🔗 ${LINK_PAGAMENTO}\n`);
+  console.log(`🧠 Leads: ${Object.keys(mem).length}`);
+  console.log(`🔗 ${LINK_PAGAMENTO}`);
+  console.log(`📅 Follow-ups: QUA (aula bonus) + QUI (Visionaire Circle)\n`);
+  checkFollowUps();
 });
