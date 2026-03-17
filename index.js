@@ -17,9 +17,14 @@ const PORT = process.env.PORT || 3000;
 const TIMEOUT_MS = 25000;
 
 // ============================================================
-// MEMORIA LOCAL
+// MEMORIA LOCAL - PERSISTENTE (usa volume do Railway)
 // ============================================================
-const MEMORY_FILE = path.join(__dirname, "leads_memory.json");
+const MEMORY_DIR = process.env.MEMORY_PATH || "/data";
+const MEMORY_FILE = path.join(MEMORY_DIR, "leads_memory.json");
+
+// Cria o diretorio se nao existir
+try { if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true }); }
+catch (e) { console.warn("Usando diretorio local para memoria"); }
 
 function loadMemory() {
   try { if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf-8")); }
