@@ -306,6 +306,36 @@ app.get("/", (req, res) => {
 });
 app.get("/health", (req, res) => res.json({ status: "ok" }));
 app.get("/lead/:id", (req, res) => res.json(getLeadData(req.params.id)));
+
+// Ver leads pausados
+app.get("/pausados", (req, res) => {
+  const mem = loadMemory();
+  const pausados = Object.entries(mem)
+    .filter(([id, d]) => d.sdr_pausado)
+    .map(([id, d]) => ({ id, nome: d.lead_nome, pausado_em: d.pausado_em }));
+  res.json({ pausados, total: pausados.length });
+});
+
+// Pausar/ativar via URL (alternativa ao comando no chat)
+app.post("/pausar/:id", (req, res) => {
+  const memory = loadMemory();
+  const lead = memory[req.params.id] || getLeadData(req.params.id);
+  lead.sdr_pausado = true;
+  lead.pausado_em = new Date().toISOString();
+  memory[req.params.id] = lead;
+  saveMemory(memory);
+  res.json({ status: "pausado", lead: lead.lead_nome || req.params.id });
+});
+
+app.post("/ativar/:id", (req, res) => {
+  const memory = loadMemory();
+  const lead = memory[req.params.id] || getLeadData(req.params.id);
+  lead.sdr_pausado = false;
+  memory[req.params.id] = lead;
+  saveMemory(memory);
+  res.json({ status: "ativado", lead: lead.lead_nome || req.params.id });
+});
+
 app.get("/leads", (req, res) => {
   const mem = loadMemory();
   const summary = Object.entries(mem).map(([id, d]) => ({
@@ -355,7 +385,36 @@ app.post("/webhook", async (req, res) => {
       return res.json({ version: "v2", content: { messages: [], actions: [] } });
     }
 
+    // COMANDOS DE CONTROLE (Amanda humana digita no ManyChat)
+    if (lastMessage === "#pausar" || lastMessage === "#pausa") {
+      const memory = loadMemory();
+      const lead = memory[userId] || getLeadData(userId);
+      lead.sdr_pausado = true;
+      lead.pausado_em = new Date().toISOString();
+      memory[userId] = lead;
+      saveMemory(memory);
+      console.log(`[PAUSADO] SDR pausado para ${lead.lead_nome || userId}`);
+      return res.json({ version: "v2", content: { messages: [], actions: [] } });
+    }
+
+    if (lastMessage === "#ativar" || lastMessage === "#ativa" || lastMessage === "#retomar") {
+      const memory = loadMemory();
+      const lead = memory[userId] || getLeadData(userId);
+      lead.sdr_pausado = false;
+      memory[userId] = lead;
+      saveMemory(memory);
+      console.log(`[ATIVADO] SDR reativado para ${lead.lead_nome || userId}`);
+      return res.json({ version: "v2", content: { messages: [], actions: [] } });
+    }
+
     const leadData = getLeadData(userId);
+
+    // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE
+    if (leadData.sdr_pausado) {
+      console.log(`[PAUSADO] Lead ${leadData.lead_nome || userId} está pausado. SDR não responde.`);
+      return res.json({ version: "v2", content: { messages: [], actions: [] } });
+    }
+
     if (userName && !leadData.user_name) leadData.user_name = userName;
     if (fonte && !leadData.fonte_entrada) leadData.fonte_entrada = fonte;
 
