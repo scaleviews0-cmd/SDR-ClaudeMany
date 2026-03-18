@@ -385,28 +385,6 @@ app.post("/webhook", async (req, res) => {
       return res.json({ version: "v2", content: { messages: [], actions: [] } });
     }
 
-    // COMANDOS DE CONTROLE (Amanda humana digita no ManyChat)
-    if (lastMessage === "#pausar" || lastMessage === "#pausa") {
-      const memory = loadMemory();
-      const lead = memory[userId] || getLeadData(userId);
-      lead.sdr_pausado = true;
-      lead.pausado_em = new Date().toISOString();
-      memory[userId] = lead;
-      saveMemory(memory);
-      console.log(`[PAUSADO] SDR pausado para ${lead.lead_nome || userId}`);
-      return res.json({ version: "v2", content: { messages: [], actions: [] } });
-    }
-
-    if (lastMessage === "#ativar" || lastMessage === "#ativa" || lastMessage === "#retomar") {
-      const memory = loadMemory();
-      const lead = memory[userId] || getLeadData(userId);
-      lead.sdr_pausado = false;
-      memory[userId] = lead;
-      saveMemory(memory);
-      console.log(`[ATIVADO] SDR reativado para ${lead.lead_nome || userId}`);
-      return res.json({ version: "v2", content: { messages: [], actions: [] } });
-    }
-
     const leadData = getLeadData(userId);
 
     // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE
