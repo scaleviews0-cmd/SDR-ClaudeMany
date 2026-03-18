@@ -108,14 +108,18 @@ async function addManyChatTag(subscriberId, tagName) {
 }
 
 // ============================================================
-// DELAY DE DIGITACAO (simula pessoa digitando)
+// DELAY DE DIGITACAO (simula pessoa real lendo e digitando)
 // ============================================================
 function calculateTypingDelay(text) {
   const words = text.split(" ").length;
-  // Base: 1.5 a 4 segundos + 0.3s por palavra (simula leitura + digitacao)
-  const base = 1500 + Math.random() * 2500;
-  const perWord = words * 300;
-  const total = Math.min(base + perWord, 8000); // max 8 segundos
+  // Base: 8 a 20 segundos (pessoa lê a mensagem, pensa, começa a digitar)
+  const base = 8000 + Math.random() * 12000;
+  // + 0.5s por palavra da resposta (digitando)
+  const perWord = words * 500;
+  // Variação aleatória adicional de 0-5s
+  const randomExtra = Math.random() * 5000;
+  // Total: entre 10 e 35 segundos (parece uma pessoa real)
+  const total = Math.min(base + perWord + randomExtra, 35000);
   return Math.floor(total);
 }
 
