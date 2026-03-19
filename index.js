@@ -26,6 +26,31 @@ const MEMORY_FILE = path.join(MEMORY_DIR, "leads_memory.json");
 try { if (!fs.existsSync(MEMORY_DIR)) fs.mkdirSync(MEMORY_DIR, { recursive: true }); }
 catch (e) { console.warn("Usando diretorio local para memoria"); }
 
+// ============================================================
+// BUFFER DE MENSAGENS - Espera a pessoa terminar de digitar
+// Quando alguem manda 3 msgs seguidas, junta tudo em uma so
+// ============================================================
+const messageBuffers = {};
+const BUFFER_WAIT = 5000; // Espera 5 segundos sem nova mensagem antes de processar
+
+function addToBuffer(userId, message) {
+  if (!messageBuffers[userId]) {
+    messageBuffers[userId] = { messages: [], timer: null };
+  }
+  messageBuffers[userId].messages.push(message);
+  // Reseta o timer a cada nova mensagem
+  if (messageBuffers[userId].timer) {
+    clearTimeout(messageBuffers[userId].timer);
+  }
+}
+
+function getBufferedMessage(userId) {
+  if (!messageBuffers[userId]) return null;
+  const combined = messageBuffers[userId].messages.join("\n");
+  delete messageBuffers[userId];
+  return combined;
+}
+
 function loadMemory() {
   try { if (fs.existsSync(MEMORY_FILE)) return JSON.parse(fs.readFileSync(MEMORY_FILE, "utf-8")); }
   catch (e) { console.warn("Erro memoria:", e.message); }
@@ -409,9 +434,39 @@ app.post("/webhook", async (req, res) => {
     // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE NADA
     if (leadData.sdr_pausado) {
       console.log(`[PAUSADO] Lead ${leadData.lead_nome || leadData.user_name || userId} está pausado. Ignorando.`);
-      // Retorna resposta vazia sem mensagens - ManyChat não tem o que enviar
       return res.status(200).json({});
     }
+
+    // BUFFER: Junta mensagens rápidas em uma só
+    // Quando a pessoa manda 3 msgs seguidas, espera ela terminar antes de responder
+    if (lastMessage) {
+      addToBuffer(userId, lastMessage);
+
+      // Se já tem um timer rodando pra esse user, só responde OK e espera
+      if (messageBuffers[userId] && messageBuffers[userId].messages.length > 1) {
+        console.log(`[BUFFER] Acumulando msg de ${leadData.lead_nome || userName || userId}: "${lastMessage}" (total: ${messageBuffers[userId].messages.length})`);
+        return res.status(200).json({});
+      }
+
+      // Primeira mensagem: espera BUFFER_WAIT pra ver se vem mais
+      console.log(`[BUFFER] Esperando ${BUFFER_WAIT}ms por mais mensagens de ${leadData.lead_nome || userName || userId}...`);
+      
+      await new Promise((resolve) => {
+        messageBuffers[userId].timer = setTimeout(resolve, BUFFER_WAIT);
+      });
+
+      // Pega todas as mensagens acumuladas
+      const combinedMessage = getBufferedMessage(userId);
+      if (!combinedMessage) {
+        return res.status(200).json({});
+      }
+
+      // Substitui lastMessage pela mensagem combinada
+      payload.last_message = combinedMessage;
+      console.log(`[BUFFER] Mensagem combinada: "${combinedMessage}"`);
+    }
+
+    const finalMessage = payload.last_message || lastMessage;
 
     // SEMPRE atualiza o username do Instagram quando disponível
     if (userName) leadData.user_name = userName;
@@ -420,24 +475,23 @@ app.post("/webhook", async (req, res) => {
     console.log("\n========================================");
     console.log(`MSG | ${leadData.lead_nome || userName || "?"} (@${leadData.user_name || "?"}) [${userId}]`);
     console.log(`State: ${leadData.lead_state} | Nicho: ${leadData.lead_nicho || "?"} | Temp: ${leadData.lead_temperatura}`);
-    console.log(`Pausado: ${leadData.sdr_pausado ? "SIM" : "não"}`);
-    console.log(`"${lastMessage}"`);
+    console.log(`"${finalMessage}"`);
     console.log("========================================");
 
-    if (!lastMessage && leadData.lead_state && leadData.lead_state !== "novo") {
-      return res.json({ version: "v2", content: { messages: [{ type: "text", text: "E ai, tudo bem?" }], actions: [] } });
+    if (!finalMessage && leadData.lead_state && leadData.lead_state !== "novo") {
+      return res.status(200).json({});
     }
 
     if (!leadData.lead_state || leadData.lead_state === "novo") leadData.lead_state = "saudacao";
 
-    const messages = buildMessages(leadData.conversation_history, lastMessage || "(primeiro contato)");
+    const messages = buildMessages(leadData.conversation_history, finalMessage || "(primeiro contato)");
     const context = buildContext(leadData);
     const fullPrompt = SYSTEM_PROMPT + "\n\n" + context;
 
     const claudePromise = anthropic.messages.create({
       model: "claude-sonnet-4-20250514", max_tokens: 1024,
       system: fullPrompt,
-      messages: messages.length > 0 ? messages : [{ role: "user", content: lastMessage || "oi" }],
+      messages: messages.length > 0 ? messages : [{ role: "user", content: finalMessage || "oi" }],
     });
 
     const response = await Promise.race([claudePromise, new Promise((_, rej) => setTimeout(() => rej(new Error("Timeout")), TIMEOUT_MS))]);
