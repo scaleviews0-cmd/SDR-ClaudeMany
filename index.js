@@ -316,33 +316,52 @@ app.get("/pausados", (req, res) => {
   res.json({ pausados, total: pausados.length });
 });
 
-// Pausar/ativar via URL (alternativa ao comando no chat)
-app.post("/pausar/:id", (req, res) => {
+// Pausar/ativar via URL (abre direto no navegador)
+app.all("/pausar/:id", (req, res) => {
   const memory = loadMemory();
   const lead = memory[req.params.id] || getLeadData(req.params.id);
   lead.sdr_pausado = true;
   lead.pausado_em = new Date().toISOString();
   memory[req.params.id] = lead;
   saveMemory(memory);
-  res.json({ status: "pausado", lead: lead.lead_nome || req.params.id });
+  console.log(`[PAUSADO] ${lead.lead_nome || req.params.id}`);
+  res.json({ status: "PAUSADO", lead: lead.lead_nome || req.params.id, id: req.params.id });
 });
 
-app.post("/ativar/:id", (req, res) => {
+app.all("/ativar/:id", (req, res) => {
   const memory = loadMemory();
   const lead = memory[req.params.id] || getLeadData(req.params.id);
   lead.sdr_pausado = false;
   memory[req.params.id] = lead;
   saveMemory(memory);
-  res.json({ status: "ativado", lead: lead.lead_nome || req.params.id });
+  console.log(`[ATIVADO] ${lead.lead_nome || req.params.id}`);
+  res.json({ status: "ATIVADO", lead: lead.lead_nome || req.params.id, id: req.params.id });
 });
 
 app.get("/leads", (req, res) => {
   const mem = loadMemory();
-  const summary = Object.entries(mem).map(([id, d]) => ({
-    id, nome: d.lead_nome, nicho: d.lead_nicho, state: d.lead_state,
-    temp: d.lead_temperatura, last: d.last_interaction, followup: d.followup_sent
+  const busca = (req.query.busca || "").toLowerCase();
+  let leads = Object.entries(mem).map(([id, d]) => ({
+    id,
+    nome: d.lead_nome || "(sem nome)",
+    instagram: d.user_name || "(sem @)",
+    nicho: d.lead_nicho || "",
+    state: d.lead_state,
+    temp: d.lead_temperatura,
+    pausado: d.sdr_pausado || false,
+    empresas: d.lead_empresas || "",
+    last: d.last_interaction,
   }));
-  res.json(summary);
+  // Filtrar por busca se tiver
+  if (busca) {
+    leads = leads.filter(l =>
+      l.nome.toLowerCase().includes(busca) ||
+      l.instagram.toLowerCase().includes(busca) ||
+      l.nicho.toLowerCase().includes(busca) ||
+      l.id.includes(busca)
+    );
+  }
+  res.json({ total: leads.length, leads });
 });
 
 // Endpoint manual para testar follow-ups
@@ -375,7 +394,7 @@ app.post("/webhook", async (req, res) => {
   try {
     const payload = req.body || {};
     const userId = payload.user_id || "unknown";
-    const userName = payload.user_name || "";
+    const userName = payload.user_name || payload.first_name || payload.full_name || payload.name || "";
     const lastMessage = payload.last_message || "";
     const fonte = payload.fonte_entrada || "";
 
@@ -389,16 +408,18 @@ app.post("/webhook", async (req, res) => {
 
     // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE
     if (leadData.sdr_pausado) {
-      console.log(`[PAUSADO] Lead ${leadData.lead_nome || userId} está pausado. SDR não responde.`);
+      console.log(`[PAUSADO] Lead ${leadData.lead_nome || leadData.user_name || userId} está pausado.`);
       return res.json({ version: "v2", content: { messages: [], actions: [] } });
     }
 
-    if (userName && !leadData.user_name) leadData.user_name = userName;
+    // SEMPRE atualiza o username do Instagram quando disponível
+    if (userName) leadData.user_name = userName;
     if (fonte && !leadData.fonte_entrada) leadData.fonte_entrada = fonte;
 
     console.log("\n========================================");
-    console.log(`MSG | ${leadData.lead_nome || userName || "?"} (${userId})`);
+    console.log(`MSG | ${leadData.lead_nome || userName || "?"} (@${leadData.user_name || "?"}) [${userId}]`);
     console.log(`State: ${leadData.lead_state} | Nicho: ${leadData.lead_nicho || "?"} | Temp: ${leadData.lead_temperatura}`);
+    console.log(`Pausado: ${leadData.sdr_pausado ? "SIM" : "não"}`);
     console.log(`"${lastMessage}"`);
     console.log("========================================");
 
