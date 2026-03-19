@@ -406,10 +406,11 @@ app.post("/webhook", async (req, res) => {
 
     const leadData = getLeadData(userId);
 
-    // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE
+    // SE O SDR ESTÁ PAUSADO PARA ESSE LEAD, NÃO RESPONDE NADA
     if (leadData.sdr_pausado) {
-      console.log(`[PAUSADO] Lead ${leadData.lead_nome || leadData.user_name || userId} está pausado.`);
-      return res.json({ version: "v2", content: { messages: [], actions: [] } });
+      console.log(`[PAUSADO] Lead ${leadData.lead_nome || leadData.user_name || userId} está pausado. Ignorando.`);
+      // Retorna resposta vazia sem mensagens - ManyChat não tem o que enviar
+      return res.status(200).json({});
     }
 
     // SEMPRE atualiza o username do Instagram quando disponível
